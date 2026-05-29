@@ -1,0 +1,122 @@
+name: Build Flutter APK from ZIP
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: 'Build ID'
+        required: true
+        type: string
+      app_name:
+        description: 'Nama Aplikasi'
+        required: true
+        type: string
+      zip_url:
+        description: 'URL ZIP Project Flutter'
+        required: true
+        type: string
+      build_mode:
+        description: 'Build Mode (debug/release)'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - debug
+          - release
+
+jobs:
+  build-flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+          cache: true
+      
+      - name: Download ZIP Project
+        run: |
+          echo "📦 Downloading ZIP from: ${{ inputs.zip_url }}"
+          curl -L -o project.zip "${{ inputs.zip_url }}"
+          unzip -q project.zip -d ./flutter_project
+          ls -la ./flutter_project/
+      
+      - name: Fix pubspec.yaml
+        run: |
+          cd ./flutter_project
+          
+          # Fix font_awesome_flutter
+          if grep -q "font_awesome_flutter:" pubspec.yaml; then
+            sed -i 's/font_awesome_flutter:.*/font_awesome_flutter: ^10.8.0/' pubspec.yaml
+          fi
+          
+          # Fix web_socket_channel
+          if grep -q "web_socket_channel:" pubspec.yaml; then
+            sed -i 's/web_socket_channel:.*/web_socket_channel: ^2.4.0/' pubspec.yaml
+          fi
+          
+          # Fix http package
+          if grep -q "http:" pubspec.yaml; then
+            sed -i 's/http:.*/http: ^1.2.0/' pubspec.yaml
+          fi
+          
+          # Fix shared_preferences
+          if grep -q "shared_preferences:" pubspec.yaml; then
+            sed -i 's/shared_preferences:.*/shared_preferences: ^2.2.0/' pubspec.yaml
+          fi
+          
+          cat pubspec.yaml
+      
+      - name: Get Packages
+        run: |
+          cd ./flutter_project
+          flutter clean
+          flutter pub get
+      
+      - name: Build Flutter APK (Release)
+        if: inputs.build_mode == 'release'
+        run: |
+          cd ./flutter_project
+          flutter build apk --release --android-skip-build-dependency-validation --no-tree-shake-icons
+          
+          mkdir -p ../output
+          cp build/app/outputs/flutter-apk/app-release.apk ../output/${{ inputs.app_name }}_release.apk
+      
+      - name: Build Flutter APK (Debug)
+        if: inputs.build_mode == 'debug'
+        run: |
+          cd ./flutter_project
+          flutter build apk --debug --android-skip-build-dependency-validation
+          
+          mkdir -p ../output
+          cp build/app/outputs/flutter-apk/app-debug.apk ../output/${{ inputs.app_name }}_debug.apk
+      
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-${{ inputs.build_id }}
+          path: output/*.apk
+          retention-days: 7
+      
+      - name: Upload Error Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ inputs.build_id }}
+          path: ./flutter_project/build/**/outputs/**/*.log
+          retention-days: 3
